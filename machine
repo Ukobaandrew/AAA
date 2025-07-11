@@ -1,0 +1,195 @@
+### **Option 1: Using Existing Middleware (Quick & Configurable)**  
+
+This option allows you to **connect and manage machines without coding** using middleware like **OpenLIS (for lab analyzers), Mirth Connect (for lab & radiology), and Orthanc (for radiology imaging)**.
+
+---
+
+### **🔹 Step-by-Step Setup for Middleware**  
+
+#### **1️⃣ OpenLIS Middleware (For Lab Machines like BC-430, BS-420, Naissa, Beckman, etc.)**  
+📌 **Purpose:** Connects lab analyzers, extracts test results, and pushes them to your MySQL database.  
+
+✅ **Steps to Set Up OpenLIS**:  
+1. **Download & Install OpenLIS** on a Windows/Linux server.  
+2. **Configure each analyzer** in OpenLIS:  
+   - Set **IP Address & Port** for the machine.  
+   - Choose **ASTM, HL7, or Serial Communication** mode.  
+3. **Map Tests** from your LIS database (your `tests` table) to machine output.  
+4. **Enable Auto Import**: OpenLIS will pull results and save them in the `test_results` table.  
+
+---
+
+#### **2️⃣ Mirth Connect (For Lab & Radiology Machines like BC-430, BS-420, MRI, CT, X-ray, ECG, Ultrasound)**  
+📌 **Purpose:** Acts as a bridge to receive lab results or radiology images and send them to your RIS/LIS database.  
+
+✅ **Steps to Set Up Mirth Connect**:  
+1. **Install Mirth Connect** on your server.  
+2. **Create a New Channel** for each machine:  
+   - Choose **Listener Type (TCP/IP, HL7, ASTM, XML, DICOM)**.  
+   - Set the **IP & Port** of the machine.  
+3. **Parse & Transform Data**: Use Mirth's built-in scripts to format results.  
+4. **Send Data to MySQL**: Configure a **destination** to push parsed results into your `test_results` table.  
+
+---
+
+#### **3️⃣ Orthanc (For Radiology Machines like X-ray, MRI, CT, Mammography, ECG, Ultrasound)**  
+📌 **Purpose:** Stores and retrieves **DICOM images** for radiology machines and allows **RIS integration**.  
+
+✅ **Steps to Set Up Orthanc**:  
+1. **Install Orthanc** on your server.  
+2. **Configure DICOM Nodes**: Add your radiology machines to Orthanc’s configuration.  
+3. **Enable Web Viewer**: Allow radiologists to **view DICOM images online**.  
+4. **Integrate with Your RIS**: Use Orthanc's API to **fetch patient scans** based on `patient_id`.  
+
+---
+
+### **Option 2: Custom Middleware (For Full Control & Future Customization)**  
+
+This option requires **developing a middleware application in PHP (Laravel) or Python (Flask/FastAPI)**.  
+
+---
+
+### **🔹 Step-by-Step Setup for Custom Middleware**  
+
+#### **1️⃣ Database Preparation (Add a Machine Integration Table)**  
+Add a table to store connected machines:  
+
+```sql
+CREATE TABLE machine_integrations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    machine_name VARCHAR(255) NOT NULL,
+    ip_address VARCHAR(45) NOT NULL,
+    port INT NOT NULL,
+    protocol ENUM('HL7', 'ASTM', 'DICOM', 'TCP/IP', 'Serial') NOT NULL,
+    status ENUM('connected', 'disconnected') DEFAULT 'disconnected',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+---
+
+#### **2️⃣ PHP Middleware (For Handling Lab Machines with ASTM/HL7)**  
+✅ **Steps to Build a PHP Middleware for Lab Machines**  
+1. Create a **TCP/IP listener** in PHP:  
+
+```php
+$host = '0.0.0.0'; // Listen on all available interfaces
+$port = 5000; // Port for lab machine communication
+
+$socket = stream_socket_server("tcp://$host:$port", $errno, $errstr);
+
+if (!$socket) {
+    die("Error creating server socket: $errstr ($errno)\n");
+}
+
+echo "Listening on $host:$port...\n";
+
+while ($conn = stream_socket_accept($socket)) {
+    $data = fread($conn, 4096); // Read incoming lab data
+    echo "Received data: $data\n";
+
+    // Parse ASTM or HL7 Data
+    $parsed_result = parse_lab_result($data);
+    
+    // Store in database
+    save_result_to_db($parsed_result);
+    
+    fclose($conn);
+}
+
+fclose($socket);
+
+function parse_lab_result($data) {
+    // Example parsing (Modify based on ASTM or HL7 format)
+    return [
+        'patient_id' => extract_value($data, 'PID'),
+        'test_name' => extract_value($data, 'TST'),
+        'result' => extract_value($data, 'RSLT'),
+    ];
+}
+
+function save_result_to_db($result) {
+    $pdo = new PDO("mysql:host=localhost;dbname=ris_lis_system", "root", "");
+    $stmt = $pdo->prepare("INSERT INTO test_results (patient_id, test_id, result, status) VALUES (?, ?, ?, 'pending')");
+    $stmt->execute([$result['patient_id'], get_test_id($result['test_name']), $result['result']]);
+}
+
+function get_test_id($test_name) {
+    $pdo = new PDO("mysql:host=localhost;dbname=ris_lis_system", "root", "");
+    $stmt = $pdo->prepare("SELECT id FROM tests WHERE name = ?");
+    $stmt->execute([$test_name]);
+    return $stmt->fetchColumn();
+}
+```
+
+This script **listens for data**, parses the ASTM/HL7 format, and **stores results in your database**.  
+
+---
+
+#### **3️⃣ Python Middleware (For Handling Radiology Machines with DICOM)**  
+✅ **Steps to Build a Python Middleware for Radiology Machines**  
+1. **Install the required packages**:  
+
+```sh
+pip install pydicom flask mysql-connector-python
+```
+
+2. **Write a DICOM listener in Python**:  
+
+```python
+from flask import Flask, request
+import pydicom
+import mysql.connector
+
+app = Flask(__name__)
+
+@app.route('/upload-dicom', methods=['POST'])
+def upload_dicom():
+    file = request.files['dicom_file']
+    dicom_data = pydicom.dcmread(file)
+
+    patient_id = dicom_data.PatientID
+    modality = dicom_data.Modality
+    study_date = dicom_data.StudyDate
+
+    save_to_db(patient_id, modality, study_date)
+
+    return "DICOM file processed successfully", 200
+
+def save_to_db(patient_id, modality, study_date):
+    conn = mysql.connector.connect(user='root', password='', host='localhost', database='ris_lis_system')
+    cursor = conn.cursor()
+    
+    query = "INSERT INTO test_results (patient_id, test_id, result, status) VALUES (%s, %s, %s, 'pending')"
+    cursor.execute(query, (patient_id, get_test_id(modality), study_date))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def get_test_id(modality):
+    conn = mysql.connector.connect(user='root', password='', host='localhost', database='ris_lis_system')
+    cursor = conn.cursor()
+    
+    query = "SELECT id FROM tests WHERE name = %s"
+    cursor.execute(query, (modality,))
+    
+    result = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    
+    return result[0] if result else None
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
+```
+
+📌 This script allows **radiology machines to send DICOM images** to the middleware, which then **extracts patient data and stores it in MySQL**.
+
+---
+
+### **Which Setup Do You Want First?**  
+✅ **If you want quick integration**, start with **OpenLIS, Mirth, or Orthanc**.  
+✅ **If you want full control**, start with the **custom PHP/Python middleware**.  
+
+Do you want help setting up **Mirth/OpenLIS**, or should I guide you through **coding the middleware** step by step? 🚀
